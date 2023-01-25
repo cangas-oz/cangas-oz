@@ -1,7 +1,7 @@
 - 👋 Hi, I’m @cangas-oz
 - 👀 I’m interested in tcl/tk, jack audio, audio devices
 - 🌱 I’m currently learning ...
-- 💞️ I’m looking to collaborate on ...
+- 💞️ I’m looking to collaborate on media players for android/linux
 - 📫 How to reach me: cangas.oz@gmail.com
 
 <!---
