@@ -1,0 +1,17 @@
+#tamanio de la fuente principal
+tamfte 9
+#factor de cambiar esa fuente en la cola de reproduccion
+#+ por mas grande, - por menos
+factor 0
+#color de fondo de la cola de reproduccion
+cfondo darkgreen
+#color de la letra de la cola de reproduccion
+cletra white
+#color del cuadro principal y sus controles
+fondo gray85
+#ancho de la ventana de la cola
+ancho 90
+#no de renglones en la ventana de cola
+renglones 8
+#directorio predeterminado al abrir "agregar medios"
+indir /media/comun

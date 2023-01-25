@@ -1,0 +1,703 @@
+#!/usr/bin/wish
+#
+# reproductor
+# Copyright (C) 2020 John Sweeney <cangas.oz@gmail.com>
+#
+# reproductor is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# reproductor is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+package require Tk 
+package require Tclx
+package require Thread
+package require ListboxDnD
+package require msgcat 1.3
+package require tooltip
+set version 4.5
+set yo [info host]
+set tamfte 9
+set factor 0
+set cfondo darkgreen
+set cletra white
+set fondo gray85
+set ancho 95
+set renglones 20
+set indir /media/comun
+set volscale 240
+set canorig ""
+set tots 0
+set totn ""
+set perd -1
+set tm1 "Posición: 00:00:00"
+cd
+if {[file exists .config/reproductor/config]} {
+	set conf [open .config/reproductor/config r]
+	while {[gets $conf linea]>=0} {
+		if {[string first # $linea]==-1} {
+			set [lindex $linea 0] [lrange $linea 1 end]
+		}
+	}
+	close $conf
+}
+set csfondo $cletra
+set csletra $cfondo
+font create defaultf -family Helvetica -size $tamfte
+tk_setPalette "$fondo"
+option add *font defaultf
+set wrap [expr $ancho/1.5*($tamfte+$factor)]
+set volscale [expr $volscale*$renglones/20]
+set mens "Cargando cola anterior..."
+set fd ""
+set pos 0
+set optoc ""
+set dur ""
+set dur1 0
+set actual 0
+set encurso 0
+set rest "Segundos restantes: "
+set fd ""
+array set tmens {0 ""}
+set vol 90
+set volsal $vol
+set top [thread::id]
+set todos_tags ""
+thread::errorproc deal
+proc deal {id msg} {
+        tk_messageBox -title Error -message "De hilo $id, [string map {\n " " "  " " " "  " " "} $msg]"
+}
+proc upd que {
+	global mens
+	set mens $que
+	update
+}
+set t1 [thread::create {
+proc play {cancion top t2} {
+	global fd msg mens
+	set msg ""
+	if {[string first \:\/\/ $cancion]==-1} {
+		set repro "| tocador file:///$cancion"
+	} else {
+		set repro "| tocador $cancion"
+		set mens "Intentando conexión ..."
+		update
+	}
+        catch {set fd [open $repro w+]} err
+        thread::transfer $top $fd
+        thread::send $top [list set fd $fd]
+        vwait err
+        return $err
+}
+proc cmnd que {
+	global msg fd t1
+	if {[string length $fd]>2} {
+	puts $fd $que
+	set msg $que
+	puts "comando: $que"
+	update
+	}
+}
+thread::wait
+}]
+set t2 [thread::create {
+	thread::wait
+}]
+set t3 [thread::create {
+	thread::wait
+}]
+proc agregar {} {
+        global todos_tags indir mens tmens tots totn
+        set lista [tk_getOpenFile -multiple 1 -initialdir $indir -title "Escoge archivo(s) que quiere agregar"]
+        set mens1 $mens
+        set mens "Cargando cola..."
+	set z [.c.lb index end]
+        #update
+        foreach x $lista {
+                set err 0
+		if {[file isfile $x]==0} {
+	                lappend todos_tags "$x {} {} {} {}"
+       		        set tmens($z) "Transmisión en vivo..."
+                	tooltip::tooltip .c.lb -items $z $tmens($z)
+                	.c.lb insert end $x
+		} else {
+			set perr [parse_tags $x]
+		}
+		if {$perr!=-1} {
+			.c.lb insert end $x
+		}
+		incr z
+        }
+        set mens $mens1
+        if {[.c.lb curselection]==""} {
+                .c.lb selection set 0
+        }
+	set errconv [catch {exec convsegundos $tots} hra]
+	if {$errconv!=0} {
+		set hra "Error de calculo"
+	}
+	set totn "Toda la lista: [string map {\- ""} $hra]"
+        update
+	return "Hecho: agregar"
+}
+proc set_vol volset {
+	global vol fd
+	if {[string length $fd]>2} {
+		set vols [expr pow([expr $volset / 100.00],3)]
+		puts $fd "v:$vols"
+		flush $fd
+		set vol [expr int([expr pow($vols,1/3.00)*100])]
+	}
+	return "$vol"
+}
+proc set_pos x {
+	global dur1 dur fd pos vol
+	set calc [expr $dur1*$x*10000000]
+	if {[string length $fd]>2} {
+	puts $fd "s:$calc"
+	flush $fd
+	set pos $x
+	}
+}
+set sk [socket -server echoaccept 35400]
+proc echoaccept {sock addr port} {
+    fconfigure $sock -buffering line
+    fileevent $sock readable [list echo $sock]
+}
+proc echo {sock} {
+        if {[eof $sock] || [catch {set in [gets $sock line]}]} {
+                close $sock
+        } else {
+                set ret [eval $line]
+                puts $sock $ret
+        }
+}
+proc echo_client {ssock} {
+    set s [socket localhost $ssock]
+    fconfigure $s -buffering line
+    return $s
+}
+# read return message from server
+proc leer {sock} {
+        global leido
+        set leido [gets $sock]
+        close $sock
+}
+proc mandar {algo que} {
+	global leido
+	set sck [echo_client 35400]
+        puts $sck [list $algo $que]
+        fileevent $sck readable [list leer $sck 35400]
+        vwait leido
+}
+proc cerrar que {
+	global fd mens
+	cd
+	set col [open .config/reproductor/cola w]
+	set x 0
+	set z [.c.lb index end]
+	set pist [.c.lb get $x]
+	while {$x<=$z} {
+		if {$pist!=""} {
+			puts $col $pist
+		}
+		incr x
+		set pist [.c.lb get $x]
+	}
+	close $col
+	if {[string first uraci $mens]>-1 || [string first ausad $mens]>-1} {
+		parar 0
+	}
+	catch {close $fd}
+	set tocerr [catch {exec pidof tocador} pidtoc]
+	if {!$tocerr} {
+		catch {exec killall tocador}
+	}
+	destroy .
+	exit
+}
+proc ele_habilitar que {
+	global simple repetir replista
+	if {($que=="s" || $que=="r") && ($simple==1 || $repetir==1)} {
+		.c.lista deselect
+	} 
+	if {$que=="r" && $repetir==1} {
+		.c.simple deselect
+	}
+        if {$que=="s" && $simple==1} {
+                .c.repetir deselect
+        }
+
+	if {$que=="l" && $replista==1} {
+		.c.simple deselect
+		.c.repetir deselect
+	}
+}
+wm title . "Reproductor de medios ($version)"
+grid [ttk::frame .c -padding "1 1 1 1"] -column 0 -row 0 -sticky nwes
+ttk::style configure TFrame -background "$fondo"
+grid columnconfigure . 0 -weight 1; grid rowconfigure . 0 -weight 1
+grid [button .c.tocar -text "Tocar" -command "tocar var"] -column 1 -row 1 -sticky we
+grid [button .c.pausar -text "Pausar" -command "pausar var"] -column 1 -row 2 -sticky we
+grid [button .c.parar -text "Parar" -command "parar var"] -column 1 -row 3 -sticky we
+grid [label .c.mens -textvariable mens] -column 2 -row 1 -sticky w
+grid [label .c.rest -textvariable rest] -column 3 -columnspan 2 -row 1 -sticky e
+grid [label .c.data1 -textvariable dtaf1 -justify left -wraplength $wrap] -column 2 -columnspan 2 -row 2 -sticky w
+grid [label .c.data2 -textvariable dtaf2 -justify left -wraplength $wrap] -column 2 -columnspan 2 -row 3 -sticky w
+grid [label .c.data3 -textvariable dtaf3 -justify left -wraplength $wrap] -column 2 -columnspan 2 -row 4 -sticky w
+grid [checkbutton .c.simple -variable simple  -anchor w -command "ele_habilitar s"] -column 4 -row 2 
+grid [label .c.simplel -text "Pista simple"] -column 3 -row 2 -sticky e
+grid [checkbutton .c.repetir -variable repetir -anchor w -command "ele_habilitar r"] -column 4 -row 3 
+grid [label .c.repetirl -text "Repetir pista"] -column 3 -row 3 -sticky e
+grid [checkbutton .c.lista -variable replista -anchor w -command "ele_habilitar l"] -column 4 -row 4 
+grid [label .c.listal -text "Repetir lista"] -column 3 -row 4 -sticky e
+grid [scale .c.vol -orient vertical -length $volscale -variable vol -from 100 -to 0 -resolution 1 -command set_vol] -column 1 -row 5 -sticky we
+grid [listbox .c.lb -listvariable lista -selectmode single -width $ancho -height $renglones -yscrollcommand ".c.ly set" -xscrollcommand  ".c.lx set" -font "-size [expr $tamfte+$factor]" -background $cfondo -foreground $cletra -selectbackground $csfondo -selectforeground $csletra] -column 2 -row 5 -sticky we -columnspan 2
+grid [scrollbar .c.ly -command ".c.lb yview" -orient vertical] -column 4 -row 5 -sticky ns
+grid [scrollbar .c.lx -command ".c.lb xview" -orient horizontal] -column 2 -row 6 -sticky we -columnspan 2
+grid [button .c.agregar -text "Agregar\nmedios" -command "agregar"] -column 1 -row 7 -sticky we
+grid [scale .c.pos -orient horizontal -length 300 -variable pos -from 0 -to 100 -resolution 0 -command set_pos] -column 2 -row 7 -sticky we -columnspan 2
+grid [button .c.cerrar -text Cerrar -command "cerrar 0"] -column 1 -row 4 -sticky we
+grid [label .c.actual -textvariable tm1] -column 2 -row 8 -sticky w
+grid [label .c.tots -textvariable totn] -column 3 -row 8 -columnspan 2 -sticky e
+foreach w [winfo children .c] {grid configure $w -padx 0 -pady 0}
+update
+ListboxDnD::enable .c.lb -command parsemas
+cd
+bind . <Double-1> [list tocar 0]
+bind . <Delete> borrar
+proc borrar {} {
+	global canorig todos_tags tmens tots totn actual notag todpist
+	bind . <Delete> ""
+	set ent ""
+	set x [.c.lb curselection]
+	set actual $x
+	if {$x!=""} {
+		set ent [.c.lb get $x]
+	} else {
+		bind . <Delete> borrar
+		return 1
+	}
+	if {$ent!="" && $ent!=$canorig} {
+		.c.lb delete $x
+		.c.lb selection clear 0 end
+		if {$notag!=1} {
+			set x 0
+			while {[lindex $todos_tags $x]!=""} {
+				set ind [string first $ent [lindex $todos_tags $x]]
+       		                if {$ind!=-1} {
+					catch {set todos_tags [lreplace $todos_tags $x $x]}
+				}
+				incr x
+			}
+		} else {
+			set todos_tags {}
+			set notag 0
+			set todpist {}
+		}	
+	} elseif {[llength $todos_tags]==1} {
+		.c.lb delete 0
+		set todos_tags ""
+	}
+	bind . <Delete> borrar
+	.c.lb selection set [lindex [parse] 0]
+}
+proc parsemas {} {
+	.c.lb selection set [parse]
+}
+proc agregar_arch arch {
+	global todos_tags tmens tots totn
+	set err 0
+	set z [.c.lb index end]
+	set perr 0
+	if {[string first :\/\/ $arch]!=-1} {
+		set x [.c.lb index end]
+		lappend todos_tags "$arch {} {} {} {}"
+		set tmens($x) "Transmisión en vivo..."
+		tooltip::tooltip .c.lb -items $x $tmens($x)
+	} else {
+		set perr [parse_tags $arch]
+	}
+	#if {$perr!=-1} {
+		.c.lb insert end $arch
+	#}
+	set errconv [catch {exec convsegundos $tots} hra]
+	if {$errconv!=0} {
+		set hra "Error de calculo"
+	}
+	set totn "Toda la lista: [string map {\- ""} $hra]"
+	update
+	return "Hecho: agregar_arch $arch, z: $z, perr: $perr"
+}
+proc parse_tags fle {
+	global todos_tags tmens aqui tots totn perd mens tm
+	set x [llength $todos_tags]
+	set z [.c.lb index end]
+	set exiferr [catch {exec ffprobe $fle} tags]
+	if {[string first Duration $tags]==-1} {
+		set mens "No se puede tocar $fle"
+		return -1
+	}
+	set tags [split $tags \n]
+	set artin [lsearch -nocase $tags *artist*]
+	set artinn [expr [string first : [lindex $tags $artin]] +2]
+	set titin [lsearch -nocase $tags *title*]
+	set titinn [expr [string first : [lindex $tags $titin]] +2]
+	set albin [lsearch -nocase $tags *album*]
+	set albinn [expr [string first : [lindex $tags $albin]] +2]
+	set durin [lsearch -nocase $tags *duration:*]
+	set durinn [expr [string first : [lindex $tags $durin]] +2]
+	set durine [expr [string first , [lindex $tags $durin]]-1]
+	lset todos_tags $x [list $fle [string range [lindex $tags $artin] $artinn end] [string range [lindex $tags $titin] $artinn end] [string range [lindex $tags $albin] $albinn end] [string range [lindex $tags $durin] $durinn $durine]]
+        if {$perd!=-1} {
+                set este $perd
+        } else {
+                set este $z
+		set tm [split [string trim [string map {\(approx\) "" s ""} [string range [lindex $tags $durin] $durinn $durine]]] ":"]
+		if {[llength $tm]>1} {
+			set segs [expr [scan [lindex $tm 0] %d]*3600 + [scan [lindex $tm 1] %d]*60 + [scan [lindex $tm 2] %d]]
+		} else {
+			set segs $tm
+		}
+		set toterr [catch {expr $tots+$segs} tots]
+		if {$toterr!=0} {
+			set tots "Error de cálculo"
+		}
+	}
+	set tmens($este) "Artista:\t[lindex [lindex $todos_tags $x] 1]\nTítulo:\t[lindex [lindex $todos_tags $x] 2]\nAlbúm:\t[lindex [lindex $todos_tags $x] 3]\nDuración: [lindex [lindex $todos_tags $x] 4]"
+	tooltip::tooltip .c.lb -items $este $tmens($este)
+	update
+	return $z
+}
+proc parse {} {
+	global todos_tags tmens canorig actual cfondo cletra nopist notag perd tots totn encurso todpist
+	set aqui $actual
+	set encurso 0
+	set ya 0
+	#update
+        set nopist [.c.lb index end]
+	set notag [llength $todos_tags]
+	set todpist [llength $nopist]
+	set y 0
+	set tots 0
+	while {$y<$nopist} {
+		set perd -1
+		set enc 0
+		set perr 0
+		set ent [.c.lb get $y]
+		if {[string first \:\/\/ $ent]==-1} {
+               		set x 0
+	               	while {$x<$notag} {
+       	                	set ind [string first $ent [lindex $todos_tags $x]]
+        	               	if {$ind!=-1} {
+					set enc 1
+					set tmens($y) "Artista:\t[lindex [lindex $todos_tags $x] 1]\nTítulo:\t[lindex [lindex $todos_tags $x] 2]\nAlbúm:\t[lindex [lindex $todos_tags $x] 3]\nDuración: [lindex [lindex $todos_tags $x] 4]"
+					tooltip::tooltip .c.lb -items $y $tmens($y)
+					update
+					break
+				}
+                       		incr x
+               		}
+			if {$enc==0} {
+				set perd $y
+				set perr [parse_tags $ent]
+			}
+			if {$perr!=-1} {
+				set seg [lindex [lindex $todos_tags $x] 4]
+				set tm [split [string trim [string map {\(approx\) "" s ""} $seg]] ":"]
+				if {[llength $tm]>1} {
+					set segs [expr [scan [lindex $tm 0] %d]*3600 + [scan [lindex $tm 1] %d]*60 + [scan [lindex $tm 2] %d]]
+				} else {
+					set segs $tm
+				}
+				set toterr [catch {expr $tots+$segs} tots]
+				if {$toterr!=0} {
+					set tots "Error de cálculo"
+				}
+			} else {
+				.c.lb delete $y
+			}
+		}
+		set nopist [.c.lb index end]
+		if {$nopist>0} {
+			if {$ent==$canorig && $ya==0} {
+				set encurso $y
+				.c.lb itemconfigure $y -background yellow
+        	     		.c.lb itemconfigure $y -foreground blue
+				set ya 1
+			} else {
+		                 .c.lb itemconfigure $y -background $cfondo
+       			         .c.lb itemconfigure $y -foreground $cletra
+				 .c.lb selection clear $y
+			}
+		}
+		incr y
+	}
+	set perd -1
+	set errconv [catch {exec convsegundos $tots} hra]
+	if {$errconv!=0} {
+		set hra "Error de calculo"
+	}
+	set totn "Toda la lista: [string map {\- ""} $hra]"
+	update
+	return [list $aqui $encurso]
+}
+proc limpiar que {
+	global todos_tags tmens dtaf1 dtaf2 dtaf3 rest totn tots
+	parar 0
+	set dtaf1 ""
+	set dtaf2 ""
+	set dtaf3 ""
+	set rest ""
+	set x 0
+	set z [.c.lb index end]
+	while {[.c.lb get $x]!=""} {
+		.c.lb delete $x
+	}
+	set z [llength $todos_tags]
+	set x 0
+	while {$x<=$z} {
+		set tmens($x) ""
+		tooltip::tooltip .c.lb -items $x ""
+		catch {set todos_tags [lreplace $todos_tags $x $x]}
+		incr x
+	}
+	set todos_tags ""
+	set tots 0
+	set totn ""
+	update
+	return "Hecho: limpiar"
+}
+proc stop {} {
+	global mens
+	set mens "No hay nada que hacer."
+	update
+	set x 0
+	while {[agregar]==""} {
+	agregar
+	incr x
+	if {$x==5} {
+		exit
+	}
+	}
+}
+proc tocar que {
+	global pos mens top t1 t2 t3 fd msg dur dur1 mens0 ther dtaf1 dtaf2 dtaf3 artist title album simple repetir replista rest vol vinic volsal canorig aqui encurso cfondo cletra yo tm1
+	set vinic 0
+	set vol $volsal
+	set dur 0
+	set dur1 0
+	set ther start
+	if {[string length $fd]>2} {
+		parar 0
+	}
+	if {[.c.lb curselection]==""} {
+		.c.lb selection set 0	
+	}
+	set x [lindex [.c.lb curselection] 0]
+	if {$x==""} {
+		set mens "No hay pista a tocar."
+		return
+	}
+	.c.pausar configure -text "Pausar"
+	set tot [string length [.c.lb get $x]]
+	.c.lb xview [expr $tot-45]
+	update
+	while {[.c.lb get $x]!=""} {
+		set canorig [.c.lb get $x]
+		set encurso $x
+		set can [string map {" " %20 \{ "" \} ""} $canorig]
+		set vinic 0
+		thread::send -async $t1 [list play $can $top $t2] ther
+		set y 0
+		while {[.c.lb get $y]!=""} {
+                	.c.lb itemconfigure $y -background $cfondo
+                	.c.lb itemconfigure $y -foreground $cletra
+        		incr y
+        	}
+	        .c.lb itemconfigure $x -background yellow
+       		.c.lb itemconfigure $x -foreground blue
+		set vol $volsal
+		set artist ""
+		set album ""
+		set title ""
+		set dtaf1 ""
+		set dtaf2 ""	
+		set dtaf3 ""
+		if {[file exists /usr/local/bin/registrar]} {
+			thread::send -async $t3 [list exec registrar "$canorig" &]
+		}
+		vwait fd
+		proc rdch {} {
+			global fd pos dur dur1 mens mens0 ther dtaf1 dtaf2 dtaf3 artist title album rest vol vinic volsal encurso cfondo cletra tm1
+			set sal [gets $fd]
+			#puts $sal
+			if {[string first Error: $sal]==0} {
+				set ther error
+			} elseif {[string first Time: $sal]==0} {
+				if {$dur==0} {
+					set tm [split [lindex [split $sal] end] ":"]
+                                        set dur1 [expr [scan [lindex $tm 0] %d]*3600 + [scan [lindex $tm 1] %d]*60 + [scan [lindex $tm 2] %d]]
+                                        set dur [split [lindex [split $sal] end] :]
+					if {[lindex $dur 0]<99} {
+						set dur "[lindex $dur 0]h [lindex $dur 1]m [format "%.2f" [lindex $dur 2]]s"
+					} else {
+						set dur "transmisión en vivo..."
+					}
+                        		set mens "Duración: $dur"
+                        		set mens0 $mens
+                        	}
+				set tm [split [lindex [split $sal] 1] ":"]
+				set tm1 "Posición: [lindex $tm 0]:[lindex $tm 1]:[lindex $tm 2]"
+				set x [expr [scan [lindex $tm 0] %d]*3600 + [scan [lindex $tm 1] %d]*60 + [lindex $tm 2]]
+				set rests [format "%.1f" [expr $dur1-$x]]
+				if {[lindex $dur 0]<99} {
+					set rest "Segundos restantes: $rests"
+					set pos [expr ($x/$dur1)*100.00]
+				} else {
+					set rest ""
+					set pos 0
+				}
+				update
+			 } elseif {[string first title $sal]!=-1 && $title==""} {
+                                #puts "tit $sal"
+                                set title [string range [string range $sal [expr [string first ":" $sal]+1] end] 0 110]
+                                        set dtaf1 "Título: $title"
+                        } elseif {[string first artist $sal]!=-1 && $artist==""} {
+                                #puts "art: $sal"
+                                set artist [string range [string range $sal [expr [string first ":" $sal]+1] end] 0 110]
+                                        set dtaf2 "Artista: $artist"
+                        } elseif {[string first album $sal]!=-1 && $album==""} {
+                                set album [string range [string range $sal [expr [string first ":" $sal]+1] end] 0 110]
+                                set dtaf3 "Albúm: $album"
+			} elseif {[string first Volume $sal]==0} {
+				if {$vinic==3} {
+					set vol [expr int([expr pow([lindex $sal 1],1/3.00)*100])]
+					set volsal $vol
+				} else {
+					set_vol $volsal
+					incr vinic
+				}
+			} elseif {[string first stream $sal]>-1} {
+				set mens "Esperando transmision ..."
+			} elseif {[string first eos $sal]!=-1} {
+				set ther done
+			}
+			update
+		}
+		if {[string length $fd]>2} {
+			fileevent $fd readable rdch
+			fileevent $fd writable {}
+			vwait ther
+		} else {
+			set ther "Error al abrir tocador"
+			set mens $ther
+			update
+		}
+		set volsal $vol
+		set vinic 0
+		update
+		catch {close $fd}
+		set fd ""
+		set mens ""
+		set mens0 ""
+		set dur 0
+#		.c.lb configure -state disabled
+		set x [lindex [parse] 1]
+		.c.lb selection set $x
+#		.c.lb configure -state normal
+		if {$simple!=1} {
+			.c.lb selection clear $x
+			catch {.c.lb itemconfigure $x -background $cfondo}
+			catch {.c.lb itemconfigure $x -foreground $cletra}
+			if {$repetir!=1} {
+				incr x
+			}
+			set pos 0
+			.c.lb selection set $x
+			.c.lb see $x
+			set tot [string length [.c.lb get $x]]
+			.c.lb xview [expr $tot-45]
+		} else {
+			set pos 0
+			break
+		}
+		if {$replista==1 && [.c.lb get $x]==""} {
+			set x 0
+		}
+	}
+}
+proc pausar var {
+	global fd mens mens0
+	if {[string first ausad $mens]>-1 || [string first urac $mens]>-1} {
+		puts $fd p
+		flush $fd
+		if {$mens!="Pausado..."} {
+			set mens "Pausado..."
+			.c.pausar configure -text "Reanudar"
+		} else {
+			set mens $mens0
+			.c.pausar configure -text "Pausar"
+		}
+	} else {
+		set mens "No puedo poner en pausa sin estar tocando."
+	}
+	return $mens
+}
+proc estado var {
+	global mens vol
+	if {$mens=="Pausado..."} {
+		set sal "pausado"
+		.c.pausar configure -text "Reanudar"
+	} elseif {[string first Duraci $mens]>-1} {
+		set sal "tocando"
+		.c.pausar configure -text "Pausar"
+	} else {
+		set sal "parado"
+		.c.pausar configure -text "Pausar"
+	}
+	lappend sal $vol
+	return $sal
+}
+proc parar var {
+	global fd pos mens
+	if {[string length $fd]>2} {
+		puts $fd q
+		catch {flush $fd}
+		set mens "Parado"
+		.c.pausar configure -text "Pausar"
+		set pos 0
+		catch {close $fd}
+	} else {
+		set mens "Ya parado"
+	}
+	set fd ""
+	set x [.c.lb curselection]
+	catch {.c.lb itemconfigure $x -background white}
+	return $mens
+}
+if {[file exists .config/reproductor/cola]} {
+	set col [open .config/reproductor/cola r]
+        if {[.c.lb curselection]==""} {
+                .c.lb selection set 0
+        }
+	set actual [.c.lb curselection]
+	while {![eof $col]} {
+		set pist [gets $col]
+		if {$pist!="" && [string first :\/\/ $pist]==-1 && [file exists $pist]} {
+			.c.lb insert end $pist
+		}
+	}
+	close $col
+	parse
+	.c.lb selection set 0
+	set mens "Parado"
+}
+

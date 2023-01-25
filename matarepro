@@ -1,0 +1,5 @@
+#!/bin/bash
+pidrep=`pidof -x reproductor`
+if [ ! -z "$pidrep" ]; then
+	kill -9 $pidrep
+fi

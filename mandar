@@ -1,0 +1,92 @@
+#!/usr/bin/tclsh
+# mandar
+# Copyright (C) 2020 John Sweeney <john.sweeney@tpg.com.au>
+#
+# This is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+if {$argc==1} {
+	set argv [list $argv 0]
+}
+set vars {set_vol set_post cerrar agregar_arch limpiar tocar pausar estado parar}
+if {[string first [lindex $argv 0] $vars]==-1} {
+       puts "El comando tiene que ser uno de:\n\t $vars"
+	exit
+}
+set reproerr [catch {exec pidof -x reproductor} repropid]
+if {$reproerr} {
+	set enver [catch {exec env} envi]
+	if {$enver==0 && [string first DISPLAY $envi]>-1} {
+		catch {exec reproductor &}
+		after 5000
+	} else {
+		puts "No hay ni reproductor ni entorno X"
+		exit
+	}
+}
+proc echo_client {ssock} {
+    set s [socket localhost $ssock]
+    fconfigure $s -buffering line
+    return $s
+}
+# read return message from server
+proc leer {sock} {
+        global leido
+        set leido [gets $sock]
+        close $sock
+}
+proc mandar {algo que} {
+	global leido
+	set sck [echo_client 35400]
+	if {$algo=="tocar"} {
+		puts $sck [list limpiar todo]
+		fileevent $sck readable [list leer $sck]
+		vwait leido
+		puts $leido
+		set sck [echo_client 35400]
+		puts $sck [list agregar_arch $que]
+		fileevent $sck readable [list leer $sck]
+		vwait leido
+		puts $leido
+		puts "$algo var"
+		set sck [echo_client 35400]
+		set que 0
+	}
+        puts $sck [list $algo $que]
+        fileevent $sck readable [list leer $sck]
+	vwait leido
+	return $leido
+	exit
+}
+set algo [lindex $argv 0]
+if {$algo=="agregar_arch" || $algo=="tocar"} {
+	set x 1
+	while {[lindex $argv $x]!=""} {
+		set canerr 0
+		if {[string first \:\/\/ [lindex $argv $x]]==-1} {
+			set canerr [catch {file normalize [lindex $argv $x]} can]
+		} else {
+			set can [lindex $argv $x]
+		}
+		if {$canerr==0} {
+			#puts "OK: $can"
+			puts [mandar $algo $can]
+		} else {
+			puts "no existir: $can"
+		}
+		incr x
+	}
+} else {
+	puts [mandar $algo [lindex $argv 1]]
+}
+exit

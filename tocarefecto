@@ -1,0 +1,3 @@
+#!/bin/bash
+gst-launch-1.0 -q filesrc location="$1" ! decodebin ! volume volume=0.25 ! level ! audioconvert ! audioresample quality=10 ! jackaudiosink
+

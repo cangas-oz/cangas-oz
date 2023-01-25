@@ -1,0 +1,10 @@
+<action>
+        <icon>gstreamer-properties</icon>
+        <name>Agregar a gstreamer</name>
+        <unique-id>1581800133033560-2</unique-id>
+        <command>mandar agregar_arch %F</command>
+        <description></description>
+        <patterns>*</patterns>
+        <audio-files/>
+        <video-files/>
+</action>
